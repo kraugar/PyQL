@@ -1,11 +1,12 @@
+# Define tokens for the Pythonic Query Language.
+# The PyQL translates a text query into python code which executes the query.
+# Any text query input which is not recognized as another token is tagged as python.
+# Use regex here rather than re and modify dist-packages/ply/lex.py to also import regex as re
+
 from __future__ import print_function
 import ply.lex as lex
 import regex as re
 
-
-# Define tokens for the Pythonic Query Language.
-# The PyQL translates a text query into python code which executes the query.
-# Any text query input which is not recognized as another token is tagged as python.
 
 tokens = [
     "AT",               # @
@@ -47,9 +48,9 @@ def t_PARAMETER(t):
     r'$ replace this'
     return t
 
-# aggregators defined in PyQL.aggregators will be entered here at run time.
+# aggregators defined in PyQL.aggregators will be entered here at run time following the given pattern.
 def t_AGGREGATOR(t):
-    r'(?P<AG1>\b[C|S|A|R])+(?P<AG2>\((?P<AG3>[^()]*+)(?:(?&AG2)(?&AG3))*\))'
+    r'(?P<AG1>\b[C|S|A|R|U])+(?P<AG2>\((?P<AG3>[^()]*+)(?:(?&AG2)(?&AG3))*\))'
     return t
 
 def t_CONJUNCTION(t):
@@ -73,7 +74,7 @@ def t_error(t):
     raise TypeError("unknown text at %r" % (p.value,))
 
 def test(text):
-    t_PARAMETER.__doc__ = "team|hits|runs|errors"
+    t_PARAMETER.__doc__ = "team|hits|runs|errors|quarter\ scores"
     t_DB_STRING.__doc__ = "Cubs|Reds|Mets"
     lexer = lex.lex(debug=0)
     print("test:",text)
@@ -84,4 +85,5 @@ def test(text):
         print(tok.type,tok.value)
 
 if __name__ == "__main__":
+    #test("runs@team as 'Team' and hits<4 and quarter scores[0]=1")
     test('A(runs,N=4,z=(1,2),format="%0.2f") as "Average Runs",(hits,errors)@team=Cubs and math.pow(hits,runs)<10')
