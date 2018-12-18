@@ -1,17 +1,17 @@
-"""
-the smallest unit is a term
-between any two terms there can be:
-  a COMMA - delimits fields and defines explicit query groups:
-                                  a, b, c @ d>1, 2, 3
-  a CONJUCTION - python in fields and acts as delimitor for conditions:
-                                  a and b, c or d @ e and f=g
-  a COMPARATOR - python in fields and distingishes a singleton from a group:
-                                  a>b, c>d @ e and f=g
-  another term - concatenate without query structural relevance
-a field is a tuple of terms
-a condition is a list of lists of tuples of terms,
-and   query: fields[@conditions]? [\|query]* [\?fields]?
-"""
+# Define the grammar for the Pythonic Query Language.
+# the smallest unit is a term
+# between any two terms there can be:
+#   a COMMA - delimits fields and defines explicit query groups:
+#                                  a, b, c @ d>1, 2, 3
+#   a CONJUCTION - python in fields and acts as delimitor for conditions:
+#                                  a and b, c or d @ e and f=g
+#   a COMPARATOR - python in fields and distingishes a singleton from a group:
+#                                  a>b, c>d @ e and f=g
+#   another term - concatenate without query structural relevance
+# a field is a tuple of terms
+# a condition is a list of lists of tuples of terms,
+# a query is: fields@conditions?arguments
+
 
 from __future__ import print_function
 import ply.yacc
@@ -26,7 +26,7 @@ class Term(object):
         self.value = value
         self.as_term = as_term or value
         self.flavor = flavor
-        self.mc = None  # to be added in dt.
+        self.mc = None  # the metacode: added in query.py
 
     def __repr__(self):
         if self.as_term:
@@ -36,10 +36,10 @@ class Term(object):
 
 class Query(object):
 
-    def __init__(self, fields, conditions=[]):
-        self.arguments = []
-        # strip white space in fields
+    def __init__(self, fields, conditions=[], arguments=[]):
+        self.arguments = arguments
         self.fields = []
+        # strip white space in fields
         for field in fields:
             while not field[0].value.strip():
                 field = field[1:]
@@ -47,42 +47,6 @@ class Query(object):
                 field = field[:-1]
             self.fields.append(field)
         self.conditions = conditions
-        self.str_args = ','.join([''.join([tok.value for tok in argument])
-                                             for argument in self.arguments])
-
-    def cleave_args(self):
-        # aggregator arguments are confused with comma delimited groups
-        #   and I dont like the looks of S(points?N=2)
-        cout = []
-        args = ''
-        for clist in self.conditions:
-            ctmp = []
-            for l, lst in enumerate(clist):
-                if len(lst) == 1:
-                    ctmp.append(lst)
-                    continue
-                if lst[0][0].flavor == 'PYTHON_FUNCTION':
-                    egroups = []
-                    fac = 1
-                    for g, glist in enumerate(lst):
-                        for t, term in enumerate(glist):
-                            if term.flavor == 'PYTHON_FUNCTION':
-                                if egroups:
-                                    fac *= 2
-                                    egroups.append(Term('+%d*'%(fac,), '', 'PYTHON'))
-                                egroups.append(term)
-                            else:
-                                args += lst[g][0].value
-                    ctmp.append([egroups])
-                else:
-                    ctmp.append([lst[0]])
-                    args += lst[1][0].value
-                for slist in clist[l+1:]:
-                    args += ','.join([''.join([tok.value for tok in toks]) for toks in slist])
-                break
-            cout.append(ctmp[:])
-        self.conditions = cout
-        return args
 
     def __repr__(self):
         ret = "Fields:\n"
@@ -92,12 +56,51 @@ class Query(object):
         for i, c in enumerate(self.conditions):
             ret += ' c%d: %s len %d\n' % (i+1, c, len(c))
         if self.arguments:
-            ret += "with str args: %s"%(self.str_args,)
+            ret += "with arguments: %s" % (self.arguments,)
         return ret
 
 
-# As per Beazley: When parsing starts, try to make a "query" because it's
-#      the name on the left-hand side of the first p_* function definition.
+# query internal to an Aggregator.
+# no comma groups allowed here
+#  which allows us to find arguments
+# build parser with start=aggregator_query
+def p_aggregator_query(p):
+    """aggregator_query : fields
+                  | fields AT singleton_conditions
+                  | fields AT singleton_conditions COMMA fields"""
+    if len(p) == 2:
+        p[0] = Query(fields=p[1])
+    elif len(p) == 4:
+        p[0] = Query(fields=p[1], conditions=p[3])
+    elif len(p) == 6:
+        p[0] = Query(fields=p[1], conditions=p[3], arguments=p[5])
+
+
+def p_singleton_conditions(p):
+    """singleton_conditions : singleton_condition
+                  | singleton_conditions CONJUNCTION singleton_conditions"""
+    if len(p) == 2:
+        p[0] = [p[1]]
+    else:
+        p[0] = p[1]+[[[(Term(p[2], None, 'CONJUNCTION'),)]]]+p[3]
+
+
+def p_singleton_condition(p):
+    """singleton_condition : terms
+                 | singleton_condition COMPARATOR singleton_condition"""
+    if len(p) == 2:
+        if type(p[1]) is tuple:
+            # the extra list here is to normalize terms for conditions
+            # group-bys have lists of len>1; singletons have lists of len=1
+            p[0] = [[p[1]]]
+        else:
+            p[0] = [p[1]]
+    else:
+        p[0] = p[1] + [[(Term(p[2], None, 'COMPARATOR'),)]] + p[3]
+
+
+# top-level query
+# build parser with start=query
 def p_query(p):
     """query : base_query
              | base_query QUESTION_MARK fields"""
@@ -157,7 +160,7 @@ def p_condition(p):
     if len(p) == 2:
         if type(p[1]) is tuple:
             # the extra list here is to normalize terms for conditions
-            # group by have lists of len>1; singletone lists of len=1
+            # group-bys have lists of len>1; singletons have lists of len=1
             p[0] = [[p[1]]]
         else:
             p[0] = [p[1]]
@@ -208,7 +211,7 @@ def p_term_as_string(p):
     p[0] = p[1]
 
 
-# each flavor of term has a mapping for python metacode generation in dt.py
+# each flavor of term has a mapping for python metacode generation in query.py
 # Access database column by index (starting at $1).
 def p_term_dollar(p):
     """term : DOLLAR"""
@@ -256,11 +259,11 @@ def p_error(p):
     raise Exception("Syntax error in input: %s" % p)
 
 
-def build_parser(debug=False):
-    return ply.yacc.yacc(debug=debug)
+def build_parser(debug=False, start='query'):
+    return ply.yacc.yacc(debug=debug, start=start)
 
 
-def test(text):
+def test(text, in_aggregator=0):
     import logging
     logging.basicConfig(
         level=logging.DEBUG,
@@ -272,7 +275,10 @@ def test(text):
     lexer.test(text)
     lexer.t_PARAMETER.__doc__ = r'team|hits|runs|errors|quarter\ scores|season'
     lexer.t_DB_STRING.__doc__ = r'Cubs|Reds|Mets'
-    parser = build_parser(debug=True)
+    if in_aggregator:
+        agg_parser = build_parser(debug=True, start='aggregator_query')
+    else:
+        parser = build_parser(debug=True, start='query')
     qob = ply.yacc.parse(text, debug=log)
     return qob
 
@@ -280,20 +286,33 @@ def test(text):
 class TestYaccer(unittest.TestCase):
 
     def test_arguments(self):
-        pyql = "S(runs,N=1)@S(hits@team and season?N=2,format='%0.d')>10"
+        pyql = """S(runs,N=2) as SumRuns@S(hits@team and season,
+                N=runs,format='%0.d')>10?output=scatter"""
         qob = test(pyql)
         self.assertEqual(qob.fields[0][0].flavor, 'AGGREGATOR')
 
+    def test_in_aggregator(self):
+        pyql = "points@team and 1,N=2,M=1"
+        qob = test(pyql, in_aggregator=1)
+        self.assertEqual(qob.arguments[0][0].value, 'N')
+        pyql = "points@team and season=2010,N=2,M=1"
+        qob = test(pyql, in_aggregator=1)
+        self.assertEqual(qob.arguments[-1][0].value, 'M')
+
     def test_as(self):
-        pyql = "S(runs,N=1) as 'Sruns'@S(hits@team and season?N=2,format='%0.d') as 'Shits'>10"
+        pyql = """S(runs,N=1) as 'Sruns'@S(hits@team and season,
+                N=2,format='%0.d') as 'Shits'>10"""
         qob = test(pyql)
         self.assertEqual(qob.fields[0][0].as_term, 'Sruns')
         self.assertEqual(qob.conditions[0][0][0][0].as_term, 'Shits')
         pyql = "(team.strip()) as T@1"
         qob = test(pyql)
-        #print('qob',qob)
         self.assertEqual(qob.fields[0][0].as_term, 'T')
 
 
 if __name__ == '__main__':
+    # qob=test('runs@runs=3,output=scatter if S(1)>2 else table')
+    # qob=test('runs@team and runs=3,output=scatter,N=int(math.pow(hits,0.5))')
+    # qob=test("points@team and season=2010,N=2,M=1",in_aggregator=1)
+    # print('qob.fields',qob)
     unittest.main()

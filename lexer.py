@@ -1,10 +1,9 @@
 # Define tokens for the Pythonic Query Language.
 # The PyQL translates a text query into python code.
 # That code is executed for each row in the database.
-# A PyQL query is exected in python:
-#    any tokens not identified are passed right on through.
+#    any tokens not identified are assumed to be Python.
 # Use regex rather than re to facilitate recurcive patterns.
-#
+# A($1), A(points),A(YARDS) as avg yards@ team = Bears and site='home'
 
 from __future__ import print_function
 import unittest
@@ -16,7 +15,7 @@ lex.re = re
 
 tokens = [
     r'AT',               # @
-    r'QUESTION_MARK',               # @
+    r'QUESTION_MARK',    # ?
     r'COMMA',            # ,
     r'DOLLAR',           # $N indexes Nth column
     r'AS',               # Used to name a field or condition.
@@ -55,6 +54,7 @@ def t_COMMA(t):
     return t
 
 
+#  for access by offset
 def t_DOLLAR(t):
     r'\$[0-9]+'
     return t
@@ -79,8 +79,10 @@ def t_PARAMETER(t):
 
 # defined in PyQL.aggregators following the given pattern.
 def t_AGGREGATOR(t):
-    #            Aggregator          ( any_non_parens   anything_in_parans )     optional [explicit read key]
-    r'(?P<AG1>\b[C|S|A|R|U])(?P<AG2>[\s]*\((?P<AG3>[^()]*)(?:(?&AG2)(?&AG3))*\))(?P<SB>\[(?:[^\[\]]++|(?&SB))*\])?'
+    (r'(?P<AG1>\b(?:C|S|A|R|U|Column|Sum|Average|Replace))'  # Aggregator
+     r'(?P<AG2>[\s]*\((?P<AG3>[^()]*)'
+     r'(?:(?&AG2)(?&AG3))*\))'     # ( any_non_parens   anything_in_parans )
+     r'(?P<SB>\[(?:[^\[\]]++|(?&SB))*\])?')   # [explicit read key]
     return t
 
 
@@ -91,13 +93,15 @@ def t_CONJUNCTION(t):
 
 # so we can distinguish between groups and simple conditions
 def t_COMPARATOR(t):
-    r'!=|==|<=|>=|<|>|=|[\s]+is[\s]+not[\s]+|\bnot[\s]+in\b|[\s]+in[\s]+|[\s]+is[\s]+|\bnot[\s]+'
+    (r'!=|==|<=|>=|<|>|=|[\s]+is[\s]+not[\s]+|'
+     r'\bnot[\s]+in\b|[\s]+in[\s]+|[\s]+is[\s]+|\bnot[\s]+')
     return t
 
 
 def t_PYTHON_FUNCTION(t):
     # see note for AGGREGATOR regex
-    r'(?P<PF1>[_a-zA-Z]+[_a-zA-Z.0-9]*)*(?P<PF2>\((?P<PF3>[^()]*)(?:(?&PF2)(?&PF3))*\))'
+    (r'(?P<PF1>[_a-zA-Z]+[_a-zA-Z.0-9]*)*'
+     r'(?P<PF2>\((?P<PF3>[^()]*)(?:(?&PF2)(?&PF3))*\))')
     return t
 
 
@@ -128,9 +132,9 @@ class TestLexer(unittest.TestCase):
         self.assertEqual(toks[5].type, 'COMMA')
 
     def test_aggregators(self):
-        pyql = "A(runs),hits,S(errors) @ S(1@team)[team and qs[-1]>6] as 'Team' and hits<4"
+        pyql = ("Average(runs),hits,S(errors) @ "
+                "Sum(1@team)[team and qs[-1]>6] as 'Team' and hits<4")
         toks = test(pyql)
-        #print("toks:", toks)
         self.assertEqual(toks[0].type, 'AGGREGATOR')
         self.assertEqual(toks[1].type, 'COMMA')
         self.assertEqual(toks[2].type, 'PARAMETER')
